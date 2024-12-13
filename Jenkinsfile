@@ -1,66 +1,97 @@
 pipeline {
-    //    triggers {
-    //     cron('* * * * *')
-    // }
+
     agent any
 
+    // options {
+    //     skipDefaultCheckout()
+    // }
+
     tools {
-        maven 'maven'
+        maven "maven"
     }
 
     environment {
-        SONAR_HOST_URL = 'http://3.109.186.241:9000' // SonarQube server URL
-        SONAR_PROJECT_KEY = 'org.springframework:gs-maven'
-        SONAR_PROJECT_NAME = 'gs-maven'
-        NEXUS_URL = 'http://13.233.245.91:8081/repository/maven-releases/' // Nexus HTTP URL
-        TOMCAT_HOST = 'http://65.0.168.203:8080'
-        TOMCAT_USER = 'admin'
-        TOMCAT_PASSWORD = 'Sushmi@2001'
-        TOMCAT_DEPLOY_URL = "http://${TOMCAT_USER}:${TOMCAT_PASSWORD}@${TOMCAT_HOST}:8080/manager/text/deploy?path=/gs-maven&update=true"
+        NEXUS_VERSION = "nexus3"
+        NEXUS_PROTOCOL = "http"
+        NEXUS_URL = "3.109.133.197:8081"
+        NEXUS_REPOSITORY = "demo-release"
+        NEXUS_REPO_ID = "demo-release"
+        NEXUS_CREDENTIAL_ID = "nexus_credentials"
+        ARTVERSION = "${env.BUILD_ID}"
+        TOMCAT_URL = "http://43.204.147.153:8080"
+        TOMCAT_CREDENTIAL_ID = "tomcat_credentials"
     }
 
     stages {
-        stage('Clone Repository') {
+
+        stage('BUILD') {
             steps {
-                git branch: 'main', credentialsId: '07140005-6eb8-498e-b2f4-27cec9ca5f78', url: 'https://github.com/madhavi23858/gs-maven.git'
+                sh 'mvn clean install -DskipTests'
+            }
+            post {
+                success {
+                    echo 'Now Archiving...'
+                    archiveArtifacts artifacts: '*/target/.war'
+                }
             }
         }
 
-        stage('SonarQube Analysis') {
+      stage('CODE ANALYSIS with SONARQUBE') {
+            environment {
+                scannerHome = tool 'sonarscanner'
+            }
+            steps {
+                withSonarQubeEnv('sonarserver') {
+                    sh '''${scannerHome}/bin/sonar-scanner \
+                        -Dsonar.projectKey=vprofile \
+                        -Dsonar.projectName=vprofile-repo \
+                        -Dsonar.projectVersion=1.0 \
+                        -Dsonar.sources=src/ \
+                        -Dsonar.java.binaries=target/test-classes/com/visualpathit/account/controllerTest/ \
+                        -Dsonar.junit.reportsPath=target/surefire-reports/ \
+                        -Dsonar.jacoco.reportsPath=target/jacoco.exec \
+                        -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml'''
+                }
+            }
+        }
+
+        stage('Publish to Nexus Repository Manager') {
             steps {
                 script {
-                    dir('complete') {
-                        withCredentials([usernamePassword(credentialsId: 'SONAR_TOKEN', usernameVariable: 'SONAR_USER', passwordVariable: 'SONAR_TOKEN')]) {
-                            sh """
-                                mvn clean verify sonar:sonar \
-                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                                    -Dsonar.projectName=${SONAR_PROJECT_NAME} \
-                                    -Dsonar.host.url=${SONAR_HOST_URL} \
-                                    -Dsonar.login=${SONAR_TOKEN}
-                            """
-                        }
+                    nexusArtifactUploader(
+                        nexusVersion: 'nexus3',
+                        protocol: 'http',
+                        nexusUrl: "${NEXUS_URL}",
+                        groupId: "com.visualpathit",
+                        version: "v2",
+                        repository: "${NEXUS_REPOSITORY}",
+                        credentialsId: "${NEXUS_CREDENTIAL_ID}",
+                        artifacts: [
+                            [artifactId: "vprofile",
+                             classifier: '',
+                             file: "target/vprofile-v2.war",
+                             type: "war"],
+                            [artifactId: "vprofile",
+                             classifier: '',
+                             file: "pom.xml",
+                             type: "pom"]
+                        ]
+                    )
+                }
+            }
+        }
+
+        stage('DEPLOY TO TOMCAT') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: "${TOMCAT_CREDENTIAL_ID}", passwordVariable: 'TOMCAT_PASS', usernameVariable: 'TOMCAT_USER')]) {
+                        sh '''
+                        curl -u ${TOMCAT_USER}:${TOMCAT_PASS} -T target/vprofile-v2.war ${TOMCAT_URL}/manager/text/deploy?path=/vprofile&update=true
+                        '''
                     }
                 }
             }
         }
 
-        stage('Build') {
-            steps {
-                script {
-                    dir('complete') {
-                        sh 'mvn clean package'
-                    }
-                }
-            }
-        }
-    }
-
-    post {
-        success {
-            echo 'Pipeline completed successfully!'
-        }
-        failure {
-            echo 'Pipeline failed. Please check the logs.'
-        }
     }
 }
